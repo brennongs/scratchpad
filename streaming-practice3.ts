@@ -23,7 +23,7 @@ class Archive {
     if (path === './tmp/2023-11-13.txt') {
       setTimeout(() => {
         writeStream.emit('error', 'noooooo')
-      }, 2000)
+      }, 100)
     }
 
     await sleepRand() 

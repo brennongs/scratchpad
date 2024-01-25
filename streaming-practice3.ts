@@ -78,14 +78,12 @@ class Repository {
 // ===== LOGIC ===== //
 class Command {
   batchToDelete: number[] = []
-  abortController: AbortController
+  abortController = new AbortController()
 
   constructor(
     private repository: Repository,
     private archive: Archive
-  ) {
-    this.abortController = new AbortController()
-  }
+  ) { }
 
   async execute() {
     console.log('Executing test')

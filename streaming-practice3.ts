@@ -1,33 +1,26 @@
-import { Readable } from 'stream'
+import { Readable, Writable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { createWriteStream } from 'fs'
 
 // ===== UTILITIES ===== //
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
-async function sleepRand() {
-  const ms = Math.random() * 1000
-  await sleep(ms)
-}
 async function fetch(action: Function) {
-  await sleepRand()
+  await new Promise(resolve => {
+    setTimeout(resolve, Math.random() * 1000)
+  })
+  
   return action()
 }
 class Archive {
-  async createWriteStream(path: string) {
-    const writeStream = createWriteStream(path)
+  createWriteStream(path: string): Promise<Writable> {
+    const writeStream = createWriteStream('/dev/null')
     
     if (path === './tmp/2023-11-13.txt') {
       setTimeout(() => {
         writeStream.emit('error', 'noooooo')
-      }, 100)
+      }, 1000)
     }
 
-    await sleepRand() 
-    return writeStream
+    return fetch(() => writeStream)
   }
 }
 
@@ -44,7 +37,16 @@ class Datum {
 }
 class Repository {
   data: Datum[] = []
-  private availableDates: string[] = ['2023-11-15', '2023-11-14', '2023-11-13', '2024-01-01', '2024-01-02', '2024-01-09', '2024-01-12', '2024-01-14']
+  private availableDates: string[] = [
+    '2023-11-15',
+    '2023-11-14',
+    '2023-11-13',
+    '2024-01-01',
+    '2024-01-02',
+    '2024-01-09',
+    '2024-01-12',
+    '2024-01-14'
+  ]
 
   constructor() {
     this.availableDates.forEach(date => {
@@ -66,8 +68,7 @@ class Repository {
   }
 
   async deleteBy({ ids }: { ids: number[] }): Promise<void> {
-    await sleepRand()
-
+    await fetch(() => {})
     ids.forEach(id => {
       this.data.splice(this.data.findIndex(data => data.id === id), 1)
     })
@@ -76,6 +77,7 @@ class Repository {
 
 
 // ===== LOGIC ===== //
+type Trigger = () => Promise<void>
 class Command {
   batchToDelete: number[] = []
   abortController = new AbortController()
@@ -98,9 +100,11 @@ class Command {
     }
   }
 
-  private async throttle(triggers: (() => Promise<void>)[]) {
-    const proceed = async (): Promise<void> => {
-      if (this.abortController.signal.aborted) {
+  private async throttle(triggers: Trigger[]) {
+    const { signal } = this.abortController
+
+    async function proceed(): Promise<void> {
+      if (signal.aborted) {
         triggers.splice(0)
         return; 
       }
@@ -116,23 +120,19 @@ class Command {
     await Promise.all(triggers.slice(0, 3).map(proceed))
   }
 
-  private async prepareTriggers(): Promise<(() => Promise<void>)[]> {
+  private async prepareTriggers(): Promise<Trigger[]> {
     const dates = await this.repository.getAvailableDates()
     const signal = this.abortController.signal
 
     return dates.map(date => async () => {
       console.log(`Processing ${date}`)
 
-      const [readStream, deleteTransform, writeStream] = await Promise.all([
-        this.repository.getAllByDate(date),
-        this.prepareDeleteTransform(),
-        this.archive.createWriteStream(`./tmp/${date}.txt`)
-      ])
-
       await pipeline(
-        readStream,
-        deleteTransform,
-        writeStream,
+        ...(await Promise.all([
+          this.repository.getAllByDate(date),
+          this.prepareDeleteTransform(),
+          this.archive.createWriteStream(`./tmp/${date}.txt`)
+        ])),
         { signal }
       ).catch((error) => {
         throw new Error(`Failed to process ${date}: ${error}`)
@@ -142,10 +142,10 @@ class Command {
     })
   }
 
-  private prepareDeleteTransform() {
+  private async prepareDeleteTransform(): Promise<(upstream: Readable) => AsyncGenerator<string, void, unknown>> {
     const { repository, batchToDelete } = this
 
-    return async function* (upstream: Readable): AsyncGenerator<string, void, unknown> {
+    return async function* (upstream) {
       for await (const datum of upstream) {
         if (batchToDelete.length >= 100) {
           await repository.deleteBy({ ids: batchToDelete.splice(0) })
@@ -163,8 +163,6 @@ class Command {
     if (this.batchToDelete.length) {
       await this.repository.deleteBy({ ids: this.batchToDelete })
     }
-
-    console.log(this.repository.data)
   }
 }
 
